@@ -1,3 +1,7 @@
+yfinance/*.txt
+fund_indicators/data/*
+stockie/log/*.log
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
