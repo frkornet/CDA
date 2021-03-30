@@ -2,8 +2,9 @@ import pandas as pd
 import numpy  as np
 import gc; gc.collect()
 
+from time                    import time
 from tqdm                    import tqdm
-from util                    import print_ticker_heading, get_stock_n_smooth, smooth, log, \
+from util                    import print_ticker_heading, get_stock_start, smooth, log, \
                                     get_current_day_and_time, open_logfile, \
                                     is_holiday, exclude_tickers, build_ticker_list, \
                                     empty_dataframe
@@ -23,11 +24,33 @@ from symbols                 import BUY, SELL, STOCKS_FNM, EXCLUDE_FNM, \
                                     TEST_TRADE_FNM, BUY_FNM, LOGPATH, \
                                     EXCLUDE_SET, TRADE_PERIOD, \
                                     BUY_THRESHOLD, SELL_THRESHOLD, \
-                                    TRADE_DAILY_RET, \
+                                    TRADE_DAILY_RET, YFLOAD_PATH, \
                                     TRADE_COLS, TRADE_COL_TYPES
 
 import warnings
 warnings.filterwarnings("ignore")
+
+
+def get_stock_n_smooth(ticker, period):
+    """
+    Copy of what is in util.py. Except this version reads what has been read 
+    from yfinance and stored on file. The stored version is smoothed already, 
+    and reading from disk should be much faster as it avoids the expensive 
+    smoothing operation. The reading from file, will only return success if 
+    there is at least 5 years worth of data to work with. 
+    """
+    gc.collect()
+    try:
+        hist = pd.read_csv(f'{YFLOAD_PATH}{ticker}.csv')
+        success = len(hist) > 5 * 252
+        log(f'Successfully retrieved smoothed price data for {ticker} '+
+            f'(len(hist)={len(hist)}, success={success})')
+    except:
+        hist = None
+        success = False
+        log(f'Failed to find {ticker}.csv in {YFLOAD_PATH}!')
+    return success, hist
+
 
 def features(data, hist, target):
     """
@@ -255,44 +278,56 @@ def ticker_trades(ticker, verbose):
 
     success, hist = get_stock_n_smooth(ticker, TRADE_PERIOD)
     if success == False:
-        return False, None, None, None
+        return False, None, None, None, None
 
+    secs = []
     try:
         # get the buy signals
+        start_time = time()
         step = "get buy signals"
         hist[target] = 0
         min_ids = argrelmin(hist.smooth.values)[0].tolist()
         hist[target].iloc[min_ids] = 1        
         train_buy_signals, test_buy_signals = \
             get_signals(hist, target, BUY_THRESHOLD)
+        secs.append(time() - start_time)
 
         # get the sell signals
+        start_time = time()
         step = "get sell signals"
         hist[target] = 0
         max_ids = argrelmax(hist.smooth.values)[0].tolist()
         hist[target].iloc[max_ids] = 1
         train_sell_signals, test_sell_signals = \
             get_signals(hist, target, SELL_THRESHOLD)
+        secs.append(time() - start_time)
         
         # merge the buy and sell signals
+        start_time = time()
         step = "merge buy and sell signals"
         train_buy_n_sell = merge_buy_n_sell_signals(train_buy_signals, 
                                                     train_sell_signals)
         test_buy_n_sell  = merge_buy_n_sell_signals(test_buy_signals, 
                                                     test_sell_signals)
+        secs.append(time() - start_time)
         
         # extract trades
+        start_time = time()
         step = "extract trades"
         train_ticker_df,   _   = extract_trades(hist, train_buy_n_sell, 
                                                 ticker, verbose)
         test_ticker_df, buy_df = extract_trades(hist, test_buy_n_sell, 
                                                 ticker, verbose)
-        return True, train_ticker_df, test_ticker_df, buy_df
+        secs.append(time() - start_time)
+       
+        log(f'ticker_trades(): secs={secs}')
+ 
+        return True, train_ticker_df, test_ticker_df, buy_df, secs
 
     except:
         log(f"Failed to get possible trades for {ticker}")
         log(f"step={step}")
-        return False, None, None, None
+        return False, None, None, None, None
      
 def get_possible_trades(tickers, threshold, period, verbose):
     """
@@ -323,15 +358,39 @@ def get_possible_trades(tickers, threshold, period, verbose):
     buy_opportunities_df = empty_dataframe(cols, col_types)
     
     #print('Determining possible trades...\n')
+    tickers_ignored = 0
+    ignored_l = []
+    tot_secs = np.zeros((4,))
+    counter = 0
     for ticker in tqdm(tickers, desc="possible trades: "):
-        success, train_ticker_df, test_ticker_df, buy_df = \
+        # if counter > 200:
+        #    break
+        counter += 1
+
+        success, train_ticker_df, test_ticker_df, buy_df, secs = \
             ticker_trades(ticker, verbose)
+
         if success == True:
             train_possible_trades_df = pd.concat([train_possible_trades_df, 
                                                   train_ticker_df])
             test_possible_trades_df = pd.concat([test_possible_trades_df, 
                                                  test_ticker_df])
             buy_opportunities_df = pd.concat([buy_opportunities_df, buy_df])
+            tot_secs += secs
+        else:
+           tickers_ignored += 1
+           ignored_l.append(ticker)
+
+    log(f'Tickers ignored count   : {tickers_ignored}')
+    log(f'The ignored tickers are : {ignored_l}')
+    log(f'tot_secs={tot_secs}\n')
+
+    descrips = ["buy signals", "sell signals", "merge signals", "extract trades"]
+    for i, m in enumerate(descrips):
+        tsec = int(tot_secs[i])
+        tmin = tsec // 60
+        tsec = tsec - tmin * 60
+        log(f'Time spent on {descrips[i]}: {tmin:02d}:{tsec:02d}')
 
     train_possible_trades_df.trading_days = \
         train_possible_trades_df.trading_days.astype(int)

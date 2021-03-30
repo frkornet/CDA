@@ -1,10 +1,11 @@
 yfinance/*.txt
 fund_indicators/data/*
-stockie/log/*.log
-stockie/notebook/*.png
-docs/proposal/*.png
+*.log
+*.png
+stockie/data/bak/*
+*.csv
 transcripts/data/*
-
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

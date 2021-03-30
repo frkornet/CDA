@@ -1,8 +1,9 @@
 
-LOGPATH         = '/Users/frkornet/Stockie/log/'
-DATAPATH        = '/Users/frkornet/Stockie/data/'
-PICPATH         = '/Users/frkornet/Stockie/pic/'
-MODELPATH       = '/Users/frkornet/Stockie/model/'
+LOGPATH         = '/Users/frkornet/CDA/Project/stockie/log/'
+DATAPATH        = '/Users/frkornet/CDA/Project/stockie/data/'
+PICPATH         = '/Users/frkornet/CDA/Project/stockie/pic/'
+MODELPATH       = '/Users/frkornet/CDA/Project/stockie/model/'
+YFLOAD_PATH     = f'{DATAPATH}yfin/'
 STOCKS_FNM      = f'{DATAPATH}stocks202002.csv'
 EXCLUDE_FNM     = f'{DATAPATH}exclude.csv'
 FULL_TRADE_FNM  = f'{DATAPATH}full_possible_trades.csv'
