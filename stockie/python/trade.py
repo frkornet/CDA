@@ -149,7 +149,7 @@ def get_signals(X_train, y_train, X_test, threshold):
     pipe.fit(X_train, y_train.values)
 
     test_signals = (pipe.predict_proba(X_test)  > threshold).astype(int)[:,1]
-    return y_train.values, test_signals
+    return y_train.values, test_signals.copy()
 
 def merge_buy_n_sell_signals(buy_signals, sell_signals):
     """
@@ -169,12 +169,20 @@ def merge_buy_n_sell_signals(buy_signals, sell_signals):
     """
 
     assert len(buy_signals) == len(sell_signals), "buy_signal and sell_signal lengths different!"
+    log(f'type(buy_signals) ={type(buy_signals)} len()={len(buy_signals)}')
+    log(f'type(sell_signals)={type(sell_signals)} len()={len(sell_signals)}')
     
-    buy_n_sell = [0] * len(buy_signals)
+    buy_n_sell = np.zeros((len(buy_signals),), dtype=int)
     length     = len(buy_n_sell)
     i          = 0
     state      = SELL
     
+    buy_ids  = np.where(buy_signals != 0)[0].tolist()
+    sell_ids = np.where(sell_signals != 0)[0].tolist()
+    log(f'merge_buy_n_sell_signals():')
+    log(f'- buy_ids ={buy_ids} len()={len(buy_ids)}')
+    log(f'- sell_ids={sell_ids} len()={len(sell_ids)}')
+
     while i < length:
         if state == SELL and buy_signals[i] == 1:
             state = BUY
@@ -187,9 +195,11 @@ def merge_buy_n_sell_signals(buy_signals, sell_signals):
         
         i = i + 1
     
+    buy_n_sell_ids  = np.where(buy_n_sell != 0)[0].tolist()
+    log(f'- buy_n_sell_ids ={buy_n_sell_ids} len()={len(buy_n_sell_ids)}')
     return buy_n_sell
 
-def extract_trades(hist, buy_n_sell, ticker, verbose):
+def extract_trades(hist, buy_n_sell, start_at, ticker, verbose):
     """
     Given a merged buy and sell list, extract all complete buy and sell pairs 
     and store each pair as a trade in a dataframe (i.e. possible_trades_df). 
@@ -215,7 +225,12 @@ def extract_trades(hist, buy_n_sell, ticker, verbose):
     a single dataframe.  
     """
 
-    test_start_at = len(hist) - len(buy_n_sell)
+    #test_start_at = len(hist) - len(buy_n_sell)
+    log(f'extract_trades():')
+    log(f'- len(hist)={len(hist)}')
+    log(f'- len(buy_n_sell)={len(buy_n_sell)}')
+    log(f'- start_at={start_at}')
+    #test_start_at = 0
     
     cols = ['buy_date', 'buy_close', 'sell_date', 'sell_close', 'gain_pct',
             'trading_days', 'daily_return', 'ticker' ]
@@ -226,12 +241,12 @@ def extract_trades(hist, buy_n_sell, ticker, verbose):
     for i, b_or_s in enumerate(buy_n_sell):
         
         if b_or_s == BUY:
-            buy_id    = test_start_at + i
+            buy_id    = start_at + i
             buy_close = hist.Close.iloc[buy_id]
             buy_date  = hist.index[buy_id]
             
         if b_or_s == SELL:
-            sell_id    = test_start_at + i
+            sell_id    = start_at + i
             sell_close = hist.Close.iloc[sell_id]
             sell_date  = hist.index[sell_id] 
             
@@ -266,6 +281,72 @@ def extract_trades(hist, buy_n_sell, ticker, verbose):
 
     return possible_trades_df, buy_opportunity_df
 
+def pair_buy_n_sell_signals(min_ids, max_ids):
+
+    length_i, length_j = len(min_ids), len(max_ids)
+    bns_pairs = [] 
+    i, j = 0, 0
+    
+    while i < length_i and j < length_j:
+       # log(f'i={i} j={j} length_i={length_i} length_j={length_j} bns_pairs={bns_pairs}')
+       # log(f'min_ids[i]={min_ids[i]} max_ids[j]={max_ids[j]}')
+       if min_ids[i] >= max_ids[j]:
+          j += 1
+       else:
+          bns_pairs.append((min_ids[i], max_ids[j]))
+          i += 1
+          j += 1
+    
+    return bns_pairs
+
+
+def process_bns_pairs(hist, bns_pairs, verbose=False):
+
+    range_min, range_plus = -3, 3
+    min_ids, max_ids, drets = [], [], []
+    for (s,e) in bns_pairs:
+        if verbose: log(f's={s}, e={e}')
+        start_values = [s+i for i in range(range_min, range_plus+1)
+                        if s+i > 0 and s+i < len(hist)]
+        if verbose: log(f'start_values={start_values}')
+        end_values = [e+i for i in range(range_min, range_plus+1)
+                        if s+i > 0 and s+i < len(hist)]
+        if verbose: log(f'end_values={end_values}')
+
+        best_s = best_e = best_dret = None
+        for si in start_values:
+            for ei in end_values:
+                days = ei - si
+                if verbose: log(f"- days={days}")
+                if days < 5 and days > 50:
+                   continue
+
+                si_close = hist.Close.iloc[si]
+                ei_close = hist.Close.iloc[ei]
+                gain    = ei_close - si_close
+                if verbose: log(f"- gain={gain}")
+                if gain <= 0.0:
+                   continue
+
+                dret = (1 + gain/si_close) ** (1/days) - 1.0
+                if verbose: log(f"- dret={dret}")
+                if best_dret is None or dret > best_dret:
+                   best_s, best_e, best_dret = si, ei, dret
+                if verbose: log(f"- best_s={best_s} best_e={best_e} best_dret={best_dret}")
+
+        if best_dret is not None and best_dret >= 0.003:
+           if verbose: log(f"adding {best_s}, {best_e}, {best_dret} to lists")
+           min_ids.append(best_s)
+           max_ids.append(best_e)
+           drets.append(best_dret)
+
+    log(f'process_bns_pairs(): min_ids={min_ids}')
+    log(f'process_bns_pairs(): max_ids={max_ids}')
+    log(f'process_bns_pairs(): drets={drets}')
+    return min_ids, max_ids 
+
+
+
 def ticker_trades(ticker, verbose):
     target = 'target'
     gc.collect()
@@ -284,14 +365,10 @@ def ticker_trades(ticker, verbose):
         step = "pre-process"
         target = 'target'
         hist[target] = 0
-        log("- calling features")
         hist = features(hist, target)
-        log("- finished features() call")
         exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
         used_cols = [c for c in hist.columns.tolist() if c not in exclude_cols]
-        log(f" - used_cols={used_cols}")
         X, y, X_train, X_test, y_train, y_test = split_data(hist, used_cols, target, 0.7)
-        log("- finished split_data() call")
         y_train_len = len(y_train)
         secs.append(time() - start_time)
 
@@ -301,18 +378,29 @@ def ticker_trades(ticker, verbose):
         min_ids = argrelmin(hist.smooth.values)[0].tolist()
         max_ids = argrelmax(hist.smooth.values)[0].tolist()
         del hist['smooth']
+        bns_pairs = pair_buy_n_sell_signals(min_ids, max_ids)
+        new_min_ids, new_max_ids = process_bns_pairs(hist, bns_pairs)
+        log(f"- len(min_ids)      ={len(min_ids)}")
+        log(f"- len(max_ids)      ={len(max_ids)}")
+        log(f"- len(bns_pairs)    ={len(bns_pairs)}")
+        log(f"- bns_pairs         ={bns_pairs}")
+        log(f"- len(new_min_ids)  ={len(new_min_ids)}")
+        log(f"- len(new_max_ids)  ={len(new_max_ids)}")
+        min_ids, max_ids = new_min_ids, new_max_ids
+        log(f"- min_ids           ={min_ids}")
+        log(f"- max_ids           ={max_ids}")
         secs.append(time() - start_time)
-        log(f"- len(min_ids)={len(min_ids)}")
-        log(f"- len(max_ids)={len(max_ids)}")
+
 
         # get the buy signals
         start_time = time()
         step = "get buy signals"
         hist[target] = 0
         hist[target].iloc[min_ids] = 1 
-        y_train = hist[target].iloc[0:y_train_len]
+        y_train = hist[target].iloc[0:y_train_len].copy()
         train_buy_signals, test_buy_signals = \
             get_signals(X_train, y_train, X_test, BUY_THRESHOLD)
+        # test_buy_signals += len(train_buy_signals)
         secs.append(time() - start_time)
 
         # get the sell signals
@@ -320,14 +408,17 @@ def ticker_trades(ticker, verbose):
         step = "get sell signals"
         hist[target] = 0
         hist[target].iloc[max_ids] = 1
-        y_train = hist[target].iloc[0:y_train_len]
+        y_train = hist[target].iloc[0:y_train_len].copy()
         train_sell_signals, test_sell_signals = \
             get_signals(X_train, y_train, X_test, SELL_THRESHOLD)
+        # test_sell_signals += len(train_sell_signals)
         secs.append(time() - start_time)
         
         # merge the buy and sell signals
         start_time = time()
         step = "merge buy and sell signals"
+        train_buy_signals_ids =np.where(train_buy_signals)
+        train_sell_signals_ids=np.where(train_sell_signals)
         train_buy_n_sell = merge_buy_n_sell_signals(train_buy_signals, train_sell_signals)
         test_buy_n_sell  = merge_buy_n_sell_signals(test_buy_signals, test_sell_signals)
         secs.append(time() - start_time)
@@ -335,17 +426,22 @@ def ticker_trades(ticker, verbose):
         # extract trades
         start_time = time()
         step = "extract trades"
-        train_ticker_df,   _   = extract_trades(hist, train_buy_n_sell, ticker, verbose)
-        test_ticker_df, buy_df = extract_trades(hist, test_buy_n_sell, ticker, verbose)
+        train_ticker_df,   _   = extract_trades(hist, train_buy_n_sell, 0, ticker, verbose)
+        test_ticker_df, buy_df = extract_trades(hist, test_buy_n_sell, len(train_buy_n_sell), ticker, verbose)
         secs.append(time() - start_time)
-     
+
+        log(f'')
         log(f'len(hist)                 ={len(hist)}') 
         log(f'np.sum(train_buy_signals) ={np.sum(train_buy_signals)}')
         log(f'np.sum(train_sell_signals)={np.sum(train_sell_signals)}')
+        log(f'np.sum(train_buy_n_sell)  ={np.sum(train_buy_n_sell)//3}')
+        log(f'len(train_ticker_df)      ={len(train_ticker_df)}') 
+        log(f'')
         log(f'np.sum(test_buy_signals)  ={np.sum(test_buy_signals)}')
         log(f'np.sum(test_sell_signals) ={np.sum(test_sell_signals)}')
-        log(f'len(train_ticker_df)      ={len(train_ticker_df)}') 
+        log(f'np.sum(test_buy_n_sell)   ={np.sum(test_buy_n_sell)//3}')
         log(f'len(test_ticker_df)       ={len(test_ticker_df)}') 
+        log(f'')
         log(f'len(buy_df)               ={len(buy_df)}') 
         log(f'ticker_trades(): secs={secs}')
  
