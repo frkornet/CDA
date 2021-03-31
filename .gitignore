@@ -4,6 +4,8 @@ fund_indicators/data/*
 *.png
 stockie/data/bak/*
 *.csv
+*.py_bak
+x.py
 transcripts/data/*
 .DS_Store
 

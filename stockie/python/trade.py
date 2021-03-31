@@ -42,6 +42,8 @@ def get_stock_n_smooth(ticker, period):
     gc.collect()
     try:
         hist = pd.read_csv(f'{YFLOAD_PATH}{ticker}.csv')
+        hist.index = hist.Date.values
+        del hist['Date']
         success = len(hist) > 5 * 252
         log(f'Successfully retrieved smoothed price data for {ticker} '+
             f'(len(hist)={len(hist)}, success={success})')
@@ -52,7 +54,7 @@ def get_stock_n_smooth(ticker, period):
     return success, hist
 
 
-def features(data, hist, target):
+def features(data, target):
     """
     Given a standard yfinance data dataframe, add features that will help
     the balanced scorecard to recognize buy and sell signals in the data.
@@ -72,13 +74,14 @@ def features(data, hist, target):
         data['PctDiff_'+str(i)] = data.Close.diff(i)
         data['StdDev_'+str(i)] = data.Close.rolling(i).std()
 
+    exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
     factor = data.Close.copy()
     for c in data.columns.tolist():
+        if c in exclude_cols:
+           continue
         data[c] = data[c] / factor
 
-    data[target] = hist[target]
     data = data.dropna()
-    del data['Close']
     
     return data
 
@@ -108,7 +111,6 @@ def split_data(stock_df, used_cols, target, train_pct):
     """
 
     test_starts_at = int(len(stock_df)*train_pct)
-    
     X = stock_df[used_cols]
     y = stock_df[target]
 
@@ -119,7 +121,7 @@ def split_data(stock_df, used_cols, target, train_pct):
 
     return X, y, X_train, X_test, y_train, y_test
 
-def get_signals(hist, target, threshold):
+def get_signals(X_train, y_train, X_test, threshold):
     """
     Used to predict buy and sell signals. The function itself has no awareness
     what it is predicting. It is just a helper function used by 
@@ -136,12 +138,6 @@ def get_signals(hist, target, threshold):
     dataframe contains. So, the caller will not see a single split date for
     all tickers. 
     """
-    # NB: we do not include smooth in data!
-    data = hist[['Close', 'Open', 'Low', 'High']]
-    data = features(data, hist, target)
-
-    used_cols = [c for c in data.columns.tolist() if c not in [target]]
-    X, y, X_train, X_test, y_train, y_test = split_data(data, used_cols, target, 0.7)
 
     encoder   = WOEEncoder()
     binner    = KBinsDiscretizer(n_bins=5, encode='ordinal')
@@ -282,44 +278,75 @@ def ticker_trades(ticker, verbose):
 
     secs = []
     try:
+
+        # pre-process data, create features, and split data
+        start_time = time()
+        step = "pre-process"
+        target = 'target'
+        hist[target] = 0
+        log("- calling features")
+        hist = features(hist, target)
+        log("- finished features() call")
+        exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
+        used_cols = [c for c in hist.columns.tolist() if c not in exclude_cols]
+        log(f" - used_cols={used_cols}")
+        X, y, X_train, X_test, y_train, y_test = split_data(hist, used_cols, target, 0.7)
+        log("- finished split_data() call")
+        y_train_len = len(y_train)
+        secs.append(time() - start_time)
+
+        # pre-process data, create features, and split data
+        start_time = time()
+        step = "local minima/maxima"
+        min_ids = argrelmin(hist.smooth.values)[0].tolist()
+        max_ids = argrelmax(hist.smooth.values)[0].tolist()
+        del hist['smooth']
+        secs.append(time() - start_time)
+        log(f"- len(min_ids)={len(min_ids)}")
+        log(f"- len(max_ids)={len(max_ids)}")
+
         # get the buy signals
         start_time = time()
         step = "get buy signals"
         hist[target] = 0
-        min_ids = argrelmin(hist.smooth.values)[0].tolist()
-        hist[target].iloc[min_ids] = 1        
+        hist[target].iloc[min_ids] = 1 
+        y_train = hist[target].iloc[0:y_train_len]
         train_buy_signals, test_buy_signals = \
-            get_signals(hist, target, BUY_THRESHOLD)
+            get_signals(X_train, y_train, X_test, BUY_THRESHOLD)
         secs.append(time() - start_time)
 
         # get the sell signals
         start_time = time()
         step = "get sell signals"
         hist[target] = 0
-        max_ids = argrelmax(hist.smooth.values)[0].tolist()
         hist[target].iloc[max_ids] = 1
+        y_train = hist[target].iloc[0:y_train_len]
         train_sell_signals, test_sell_signals = \
-            get_signals(hist, target, SELL_THRESHOLD)
+            get_signals(X_train, y_train, X_test, SELL_THRESHOLD)
         secs.append(time() - start_time)
         
         # merge the buy and sell signals
         start_time = time()
         step = "merge buy and sell signals"
-        train_buy_n_sell = merge_buy_n_sell_signals(train_buy_signals, 
-                                                    train_sell_signals)
-        test_buy_n_sell  = merge_buy_n_sell_signals(test_buy_signals, 
-                                                    test_sell_signals)
+        train_buy_n_sell = merge_buy_n_sell_signals(train_buy_signals, train_sell_signals)
+        test_buy_n_sell  = merge_buy_n_sell_signals(test_buy_signals, test_sell_signals)
         secs.append(time() - start_time)
         
         # extract trades
         start_time = time()
         step = "extract trades"
-        train_ticker_df,   _   = extract_trades(hist, train_buy_n_sell, 
-                                                ticker, verbose)
-        test_ticker_df, buy_df = extract_trades(hist, test_buy_n_sell, 
-                                                ticker, verbose)
+        train_ticker_df,   _   = extract_trades(hist, train_buy_n_sell, ticker, verbose)
+        test_ticker_df, buy_df = extract_trades(hist, test_buy_n_sell, ticker, verbose)
         secs.append(time() - start_time)
-       
+     
+        log(f'len(hist)                 ={len(hist)}') 
+        log(f'np.sum(train_buy_signals) ={np.sum(train_buy_signals)}')
+        log(f'np.sum(train_sell_signals)={np.sum(train_sell_signals)}')
+        log(f'np.sum(test_buy_signals)  ={np.sum(test_buy_signals)}')
+        log(f'np.sum(test_sell_signals) ={np.sum(test_sell_signals)}')
+        log(f'len(train_ticker_df)      ={len(train_ticker_df)}') 
+        log(f'len(test_ticker_df)       ={len(test_ticker_df)}') 
+        log(f'len(buy_df)               ={len(buy_df)}') 
         log(f'ticker_trades(): secs={secs}')
  
         return True, train_ticker_df, test_ticker_df, buy_df, secs
@@ -360,10 +387,11 @@ def get_possible_trades(tickers, threshold, period, verbose):
     #print('Determining possible trades...\n')
     tickers_ignored = 0
     ignored_l = []
-    tot_secs = np.zeros((4,))
+    tot_secs = np.zeros((6,))
     counter = 0
+    gc.collect()
     for ticker in tqdm(tickers, desc="possible trades: "):
-        # if counter > 200:
+        # if counter > 10:
         #    break
         counter += 1
 
@@ -381,11 +409,14 @@ def get_possible_trades(tickers, threshold, period, verbose):
            tickers_ignored += 1
            ignored_l.append(ticker)
 
+        gc.collect()
+
     log(f'Tickers ignored count   : {tickers_ignored}')
     log(f'The ignored tickers are : {ignored_l}')
     log(f'tot_secs={tot_secs}\n')
 
-    descrips = ["buy signals", "sell signals", "merge signals", "extract trades"]
+    descrips = ["pre-process data", "local minima/maxima", "buy signals", 
+                "sell signals", "merge signals", "extract trades"]
     for i, m in enumerate(descrips):
         tsec = int(tot_secs[i])
         tmin = tsec // 60
