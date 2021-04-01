@@ -318,7 +318,7 @@ def process_bns_pairs(hist, bns_pairs, verbose=False):
             for ei in end_values:
                 days = ei - si
                 if verbose: log(f"- days={days}")
-                if days < 5 and days > 50:
+                if days < 5 or days > 50:
                    continue
 
                 si_close = hist.Close.iloc[si]
@@ -488,7 +488,7 @@ def get_possible_trades(tickers, threshold, period, verbose):
     gc.collect()
     for ticker in tqdm(tickers, desc="possible trades: "):
         # if counter > 10:
-        #    break
+        #   break
         counter += 1
 
         success, train_ticker_df, test_ticker_df, buy_df, secs = \

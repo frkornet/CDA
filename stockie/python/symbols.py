@@ -14,8 +14,8 @@ BUY_FNM         = f'{DATAPATH}open_buys.csv'
 EXCLUDE_SET     = {'AGE', 'AMK', 'BURG', 'CFB', 'LBC', 'MEC', 'OSW', 'PSN', 
                    'PTI', 'SBT'}
 TRADE_PERIOD    = "10y"
-BUY_THRESHOLD   = 0.5
-SELL_THRESHOLD  = 0.5
+BUY_THRESHOLD   = 0.6
+SELL_THRESHOLD  = 0.6
 QA_PERIOD       = "15y"
 TRADE_DAILY_RET = 50.0
 YF_TIMES        = 3
