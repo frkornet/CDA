@@ -94,7 +94,7 @@ if __name__ == '__main__':
       print('Where ticker is the stock symbol that you want to download the P/E ratio for')
       sys.exit() 
 
-   data_path = Path('data_save') 
+   data_path = Path('data') 
    ticker = sys.argv[1]
 
    try:
