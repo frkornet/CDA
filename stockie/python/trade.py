@@ -6,8 +6,7 @@ from time                    import time
 from tqdm                    import tqdm
 from util                    import print_ticker_heading, get_stock_start, smooth, log, \
                                     get_current_day_and_time, open_logfile, \
-                                    is_holiday, exclude_tickers, build_ticker_list, \
-                                    empty_dataframe
+                                    is_holiday, exclude_tickers, empty_dataframe
 from scipy.signal            import argrelmin, argrelmax
 
 from sklearn.linear_model    import LogisticRegression
@@ -15,7 +14,7 @@ from category_encoders       import WOEEncoder
 
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline        import make_pipeline, Pipeline
-from sklearn.preprocessing   import KBinsDiscretizer, FunctionTransformer
+from sklearn.preprocessing   import KBinsDiscretizer, FunctionTransformer, StandardScaler
 from sklearn.model_selection import cross_val_score
 from sklearn.impute          import SimpleImputer
 
@@ -27,9 +26,20 @@ from symbols                 import BUY, SELL, STOCKS_FNM, EXCLUDE_FNM, \
                                     TRADE_DAILY_RET, YFLOAD_PATH, \
                                     TRADE_COLS, TRADE_COL_TYPES
 
+from indicators              import RSI, WPR, MFI, BBP
+
 import warnings
 warnings.filterwarnings("ignore")
 
+def build_ticker_list():
+    fnm = '/Users/frkornet/CDA/Project/fund_indicators/name_map.csv'
+    name_map = pd.read_csv(fnm)
+    name_map = name_map.loc[name_map.data == 1]
+    tickers = name_map.ticker.unique().tolist()
+    # np.random.seed(1234)
+    # idx = np.random.choice(len(tickers), size=100, replace=False)
+    # ts = np.array(tickers)[idx].tolist()
+    return tickers
 
 def get_stock_n_smooth(ticker, period):
     """
@@ -69,10 +79,9 @@ def features(data, target):
 
     for i in windows:
         ma = data.Close.rolling(i).mean()
-        # Moving Average Convergence Divergence (MACD)
-        data['MACD_'+str(i)] = ma - data.Close
-        data['PctDiff_'+str(i)] = data.Close.diff(i)
-        data['StdDev_'+str(i)] = data.Close.rolling(i).std()
+        data[f'MACD_{i}']    = ma - data.Close
+        data[f'PctDiff_{i}'] = data.Close.diff(i)
+        data[f'StdDev_{i}']  = data.Close.rolling(i).std()
 
     exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
     factor = data.Close.copy()
@@ -80,6 +89,13 @@ def features(data, target):
         if c in exclude_cols:
            continue
         data[c] = data[c] / factor
+
+    for i in windows:
+        # data[f'RSI_{i}']     = RSI(data, i) / 100
+        data[f'WPR_{i}']     = WPR(data, i)
+        # data[f'MFI_{i}']     = MFI(data, i)
+        # data[f'BBP_{i}']      = BBP(data, i)
+
 
     data = data.dropna()
     
@@ -139,13 +155,16 @@ def get_signals(X_train, y_train, X_test, threshold):
     all tickers. 
     """
 
+    scaler    = StandardScaler()
     encoder   = WOEEncoder()
     binner    = KBinsDiscretizer(n_bins=5, encode='ordinal')
     objectify = FunctionTransformer(func=stringify, check_inverse=False, validate=False)
     imputer   = SimpleImputer(strategy='constant', fill_value=0.0)
+    # clf       = LogisticRegression(penalty='elasticnet', class_weight='balanced', random_state=42, C=0.5, 
+    #             l1_ratio=0.5, solver='saga')
     clf       = LogisticRegression(class_weight='balanced', random_state=42)
 
-    pipe = make_pipeline(binner, objectify, encoder, imputer, clf)
+    pipe = make_pipeline(scaler, binner, objectify, encoder, imputer, clf)
     pipe.fit(X_train, y_train.values)
 
     test_signals = (pipe.predict_proba(X_test)  > threshold).astype(int)[:,1]
@@ -390,7 +409,6 @@ def ticker_trades(ticker, verbose):
         log(f"- min_ids           ={min_ids}")
         log(f"- max_ids           ={max_ids}")
         secs.append(time() - start_time)
-
 
         # get the buy signals
         start_time = time()

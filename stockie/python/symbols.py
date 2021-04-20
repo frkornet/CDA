@@ -11,11 +11,12 @@ TRAIN_TRADE_FNM = f'{DATAPATH}train_possible_trades.csv'
 TEST_TRADE_FNM  = f'{DATAPATH}test_possible_trades.csv'
 STATS_FNM       = f'{DATAPATH}ticker_stats.csv'
 BUY_FNM         = f'{DATAPATH}open_buys.csv'
+NAME_MAP        = f'/Users/frkornet/CDA/Project/fund_indicators/name_map.csv'
 EXCLUDE_SET     = {'AGE', 'AMK', 'BURG', 'CFB', 'LBC', 'MEC', 'OSW', 'PSN', 
                    'PTI', 'SBT'}
 TRADE_PERIOD    = "10y"
-BUY_THRESHOLD   = 0.6
-SELL_THRESHOLD  = 0.6
+BUY_THRESHOLD   = 0.5
+SELL_THRESHOLD  = 0.5
 QA_PERIOD       = "15y"
 TRADE_DAILY_RET = 50.0
 YF_TIMES        = 3
