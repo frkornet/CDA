@@ -28,6 +28,8 @@ from symbols                 import BUY, SELL, STOCKS_FNM, EXCLUDE_FNM, \
 
 from indicators              import RSI, WPR, MFI, BBP
 
+from itertools import chain, combinations
+
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -37,7 +39,7 @@ def build_ticker_list():
     name_map = name_map.loc[name_map.data == 1]
     tickers = name_map.ticker.unique().tolist()
     # np.random.seed(1234)
-    # idx = np.random.choice(len(tickers), size=100, replace=False)
+    # idx = np.random.choice(len(tickers), size=227, replace=False)
     # ts = np.array(tickers)[idx].tolist()
     return tickers
 
@@ -79,9 +81,12 @@ def features(data, target):
 
     for i in windows:
         ma = data.Close.rolling(i).mean()
-        data[f'MACD_{i}']    = ma - data.Close
-        data[f'PctDiff_{i}'] = data.Close.diff(i)
-        data[f'StdDev_{i}']  = data.Close.rolling(i).std()
+        if 'MACD' in comb:    
+           data[f'MACD_{i}']    = ma - data.Close
+        if 'PctDiff' in comb: 
+           data[f'PctDiff_{i}'] = data.Close.diff(i)
+        if 'StdDev' in comb:  
+           data[f'StdDev_{i}']  = data.Close.rolling(i).std()
 
     exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
     factor = data.Close.copy()
@@ -91,11 +96,22 @@ def features(data, target):
         data[c] = data[c] / factor
 
     for i in windows:
-        # data[f'RSI_{i}']     = RSI(data, i) / 100
-        data[f'WPR_{i}']     = WPR(data, i)
-        # data[f'MFI_{i}']     = MFI(data, i)
-        # data[f'BBP_{i}']      = BBP(data, i)
+        if 'RSI' in comb:
+           data[f'RSI_{i}']     = RSI(data, i) / 100
+        if 'WPR' in comb:
+           data[f'WPR_{i}']     = WPR(data, i) / 100
+        if 'MFI' in comb:
+           data[f'MFI_{i}']     = MFI(data, i) / 100
+        if 'BBP' in comb:
+           data[f'BBP_{i}']     = BBP(data, i)
 
+
+    if 'P/E Ratio' in data.columns:
+       if 'P/E Ratio' not in comb:
+          log(f'Deleting P/E Ratio feature: comb={comb}')
+          del data['P/E Ratio']
+       else:
+          log(f'Keeping P/E Ratio feature: comb={comb}')
 
     data = data.dropna()
     
@@ -160,8 +176,6 @@ def get_signals(X_train, y_train, X_test, threshold):
     binner    = KBinsDiscretizer(n_bins=5, encode='ordinal')
     objectify = FunctionTransformer(func=stringify, check_inverse=False, validate=False)
     imputer   = SimpleImputer(strategy='constant', fill_value=0.0)
-    # clf       = LogisticRegression(penalty='elasticnet', class_weight='balanced', random_state=42, C=0.5, 
-    #             l1_ratio=0.5, solver='saga')
     clf       = LogisticRegression(class_weight='balanced', random_state=42)
 
     pipe = make_pipeline(scaler, binner, objectify, encoder, imputer, clf)
@@ -409,18 +423,29 @@ def ticker_trades(ticker, verbose):
         log(f"- min_ids           ={min_ids}")
         log(f"- max_ids           ={max_ids}")
         secs.append(time() - start_time)
+    
+    except:
+        log(f"Failed to get possible trades for {ticker}")
+        log(f"step={step}")
+        return False, None, None, None, None
 
-        # get the buy signals
-        start_time = time()
-        step = "get buy signals"
-        hist[target] = 0
-        hist[target].iloc[min_ids] = 1 
-        y_train = hist[target].iloc[0:y_train_len].copy()
-        train_buy_signals, test_buy_signals = \
+    # get the buy signals
+    start_time = time()
+    step = "get buy signals"
+    hist[target] = 0
+    hist[target].iloc[min_ids] = 1 
+    y_train = hist[target].iloc[0:y_train_len].copy()
+    if len(y_train.unique()) < 2:
+       log(f'y_train only contains zeros, so nothing to train on!')
+       log(f'Skipping training for {ticker}')
+       return False, None, None, None, None
+
+    train_buy_signals, test_buy_signals = \
             get_signals(X_train, y_train, X_test, BUY_THRESHOLD)
-        # test_buy_signals += len(train_buy_signals)
-        secs.append(time() - start_time)
+    # test_buy_signals += len(train_buy_signals)
+    secs.append(time() - start_time)
 
+    try:
         # get the sell signals
         start_time = time()
         step = "get sell signals"
@@ -596,6 +621,71 @@ def trade_main():
                buy_opportunities_df)
     log('Done.')
 
+def powerset(iterable):
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    s = list(iterable)  # allows duplicate elements
+    return chain.from_iterable(combinations(s, r) for r in range(len(s)+1))
+
+def stats_table(df, days_cutoff, verbose=False):
+    pos_df = df[['gain_pct', 'trading_days']].loc[df.gain_pct > 0].groupby(by='trading_days').count()
+    pos_df.columns = ['pos_counts']
+    loss_df = df[['gain_pct', 'trading_days']].loc[df.gain_pct < 0].groupby(by='trading_days').count()
+    loss_df.columns = ['neg_counts']
+    zero_df = df[['gain_pct', 'trading_days']].loc[df.gain_pct == 0].groupby(by='trading_days').count()
+    zero_df.columns = ['zero_counts']
+    temp = pd.concat([loss_df, pos_df, zero_df], join="outer").reset_index()
+    cols = [ 'pos_counts', 'neg_counts', 'zero_counts' ]
+
+    stats_cnt = np.zeros((3, 4))
+    totals_col = np.zeros((4,))
+    total_lt_xd = 0
+    for i, num in enumerate(temp[cols].loc[temp.trading_days < days_cutoff].sum()):
+        stats_cnt[0,i] = num
+        stats_cnt[2,i] += num
+    stats_cnt[0,3] = np.sum(stats_cnt[0,0:3])
+    
+    for i, num in enumerate(temp[cols].loc[temp.trading_days >= days_cutoff].sum()):
+        stats_cnt[1,i] = num
+        stats_cnt[2,i] += num
+    stats_cnt[1,3] = np.sum(stats_cnt[1,0:3])  
+    stats_cnt[2,3] = stats_cnt[0,3] + stats_cnt[1,3]
+    
+    stats_pct = (stats_cnt.copy() / stats_cnt[2,3]) * 100
+    if verbose == False:
+        return stats_cnt, stats_pct
+    
+    print('         \t pos     neg    zero    total')
+    print('         \t======  ======  =====   ======')
+    print(f'< {days_cutoff} days\t', end='')
+    for i in range(4):
+        print(f'{stats_cnt[0, i]:.0f}', end='\t')
+        
+    print(f'\n>= {days_cutoff} days\t', end='')
+    for i in range(4):
+        print(f'{stats_cnt[1, i]:.0f}', end='\t') 
+    
+    print('\n         \t------\t------\t-----\t------')
+    print('         \t', end='')
+    for i in range(4):
+        print(f'{stats_cnt[2, i]:.0f}', end='\t')
+
+    print('\n\n\n')
+    print('         \t pos     neg    zero    total')
+    print('         \t======  ======  =====   ======')
+    print(f'< {days_cutoff} days\t', end='')
+    for i in range(4):
+        print(f'{stats_pct[0, i]:.2f}', end='\t')
+        
+    print(f'\n>= {days_cutoff} days\t', end='')
+    for i in range(4):
+        print(f'{stats_pct[1, i]:.2f}', end='\t') 
+    
+    print('\n         \t------\t------\t-----\t------')
+    print('         \t', end='')
+    for i in range(4):
+        print(f'{stats_pct[2, i]:.2f}', end='\t')
+    return stats_cnt, stats_pct
+
 if __name__ == "__main__":
 
     log_fnm = "trade"+ get_current_day_and_time() + ".log"
@@ -606,4 +696,36 @@ if __name__ == "__main__":
         log('', True)
         log('Done', True)
     else:
-        trade_main()
+        run_type = 'single'
+        if run_type == 'job':
+           cols = ['MACD', 'PctDiff', 'StdDev', 'RSI', 'WPR', 'MFI', 'BBP']
+           combs = []
+           for p in powerset(cols):
+               if len(p) > 2:
+                  combs.append(p)
+        else:
+           combs = [ ('MACD', 'RSI', 'BBP', 'P/E Ratio') ]
+
+        best_comb  = None
+        best_score = None
+        for run, comb in enumerate(combs):
+            # if run > 1:
+            #   break
+
+            print('')
+            msg = f'{run:03d}/{len(combs)}: Running trade_main() with combination {comb}:'
+            print(f'{msg}')
+            print(f'='*len(msg))
+            print('\n')
+            trade_main()
+            test_df = pd.read_csv(TEST_TRADE_FNM)
+            stats_cnt, stats_pct = stats_table(test_df, 55)
+            score = stats_pct[0,0]
+            if best_score is None or score > best_score:
+               best_comb  = comb
+               best_score = score
+
+            print(f'best_comb={best_comb} best_score={best_score:.2f}')
+
+        print(f'Best combination of features is : {best_comb}')
+        print(f'Best score is                   : {best_score:.2f}') 

@@ -35,7 +35,10 @@ def RSI(df, window):
 def WPR(df, window):
     Highest_High = df['High'].rolling(window,min_periods=window).max()
     Lowest_Low   = df['Low'].rolling(window,min_periods=window).min()
-    wpr=100 *(df['Close'] - Highest_High)/(Highest_High - Lowest_Low)
+
+    denom = (Highest_High - Lowest_Low).values
+    denom[denom == 0] = 0.00001
+    wpr = 100 * (df['Close'] - Highest_High) / denom
 
     return wpr
 
@@ -57,17 +60,24 @@ def MFI(df, window):
 
     mfi_pos = pos_money_flow.rolling(window).sum()
     mfi_neg = neg_money_flow.rolling(window).sum()
-    mfi = 100 * mfi_pos / (mfi_pos+mfi_neg)
+
+    denom = (mfi_pos+mfi_neg).values
+    denom[denom == 0] = 0.00001
+    mfi = 100 * mfi_pos / denom
 
     return mfi
 
 # Bollinger Bands (BB)
 def BBP(df, window):
-    MA=df['Close'].rolling(window).mean()
-    Std_Dev=df['Close'].rolling(window).std()
+    MA = df['Close'].rolling(window).mean()
+    Std_Dev = df['Close'].rolling(window).std()
 
-    BOLU=MA+2*Std_Dev
-    BOLL=MA-2*Std_Dev
+    BOLU=MA + 2 * Std_Dev
+    BOLL=MA - 2 * Std_Dev
 
-    return ( df['Close'] - BOLL) / (BOLU - BOLL)
+    denom = (BOLU - BOLL).values
+    denom[denom == 0.0] = 0.00001
+    bbp = ( df['Close'] - BOLL) / denom
+
+    return bbp
 
