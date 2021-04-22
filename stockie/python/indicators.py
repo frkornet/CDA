@@ -11,7 +11,7 @@
 import numpy as np
 import pandas as pd
 
-def RSI(df, window):
+def RSI_Frank(df, window):
     rsi=df['Close'].copy()
     rsi[:]=np.nan
 
@@ -25,11 +25,63 @@ def RSI(df, window):
     loss [ loss > 0] = 0
     loss = np.abs(loss)
     
-    Avg_gain = gain.fillna(0).rolling(14).mean()
-    Avg_loss = loss.fillna(0).rolling(14).mean()
+    Avg_gain = gain.fillna(0).rolling(window).mean()
+    Avg_loss = loss.fillna(0).rolling(window).mean()
     rsi = 100 * (Avg_gain / (Avg_gain + Avg_loss))
 
     return rsi    
+
+def RSI_Harshad(df, window):
+    Gain=df['Close'].copy()
+    Loss=df['Close'].copy()
+    Avg_gain=df['Close'].copy()
+    Avg_loss=df['Close'].copy()
+    rsi=df['Close'].copy()
+
+    Gain[:]=0.0
+    Loss[:]=0.0
+    Avg_gain[:]=0.0
+    Avg_loss[:]=0.0
+    rsi[:]=np.nan
+
+    for i in range(1,len(df)):
+        if df.Close.iloc[i] > df.Close.iloc[i-1]:
+            Gain[i]=df.Close.iloc[i]-df.Close.iloc[i-1]
+        else:
+            # For loss save the absolute value on loss
+            Loss[i]=abs(df.Close.iloc[i]-df.Close.iloc[i-1])
+        if i>window:
+            Avg_gain[i]=(Avg_gain[i-1]*(window-1)+Gain[i])/window
+            Avg_loss[i]=(Avg_loss[i-1]*(window-1)+Loss[i])/window
+            rsi[i]=(100*Avg_gain[i]/(Avg_gain[i]+Avg_loss[i])).round(2)
+
+    return rsi
+
+def RSI(df, window):
+    rsi=df['Close'].copy()
+    rsi[:]=np.nan
+
+    change = df.Close - df.Close.shift(1)
+    change = change.fillna(0)
+
+    gain = change.copy()
+    gain [ gain <= 0] = 0
+
+    loss = change.copy()
+    loss [ loss > 0] = 0
+    loss = np.abs(loss)
+
+    avg_gain = gain[:window].mean()
+    avg_loss = loss[:window].mean()
+
+    i=window
+    for g, l in zip(gain[window:], loss[window:]):
+        avg_gain = (avg_gain * (window-1) + g) / window
+        avg_loss = (avg_loss * (window-1) + l) / window
+        rsi[i] = 100 * (avg_gain / (avg_gain + avg_loss) )
+        i+=1
+
+    return rsi
 
 # Williams Percent Range (WPR)
 def WPR(df, window):
