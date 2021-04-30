@@ -1,9 +1,32 @@
 import pandas                as pd
 import numpy                 as np
-from   util                  import log, add_days_to_date, get_stock_start
-from   symbols               import BUY, SELL, TOLERANCE, STOP_LOSS
+from   util                  import log, add_days_to_date
+from   symbols               import BUY, SELL, TOLERANCE, STOP_LOSS, YFLOAD_PATH, TRANSACTION_PERC
 import yfinance              as yf
 import gc; gc.enable()
+
+def get_stock_start(ticker, times, start, end):
+    """ 
+    Copy of what is in util.py. Except this version reads what has been read 
+    from yfinance and stored on file. The stored version is smoothed already, 
+    and reading from disk should be much faster as it avoids the expensive 
+    smoothing operation. The reading from file, will only return success if 
+    there is at least 5 years worth of data to work with. 
+    """
+    gc.collect()
+    try:
+        hist = pd.read_csv(f'{YFLOAD_PATH}{ticker}.csv')
+        hist.index = hist.Date.values
+        del hist['Date']
+        success = len(hist) > 5 * 252 
+        log(f'Successfully retrieved smoothed price data for {ticker} '+
+            f'(len(hist)={len(hist)}, success={success})')
+    except:
+        hist = None
+        success = False
+        log(f'Failed to find {ticker}.csv in {YFLOAD_PATH}!')
+    return success, hist
+
 
 class Capital(object):
     """
@@ -12,7 +35,7 @@ class Capital(object):
     four columns: date, capital, in_use, and free. The method day_close()
     is used to store the capital, in_use, and free after closing the day.
 
-    This class is used by PnL class whgich is the real workhorse. 
+    This class is used by PnL class which is the real workhorse. 
     """
     def __init__(self):
         cols = [ 'date', 'capital', 'in_use', 'free']
@@ -140,9 +163,13 @@ class PnL(object):
     def __calc_no_shares_to_buy__(self):
         self.invested[self.ticker] = self.hist.copy()
         idx = self.invested[self.ticker].index == self.buy_date
-        self.share_price = float(self.invested[self.ticker].Close.loc[idx])
+        # self.share_price = float(self.invested[self.ticker].Close.loc[idx])
+        # self.share_price = ( float(self.invested[self.ticker].Close.loc[idx]) 
+        #                   + float(self.invested[self.ticker].High.loc[idx])
+        #                   + float(self.invested[self.ticker].Low.loc[idx]) ) / 3.0
+        self.share_price = float(self.invested[self.ticker].Close.loc[idx]) * (1.0 + TRANSACTION_PERC)
         self.no_shares = self.amount / self.share_price
-        self.stop_loss = self.share_price * 0.9
+        self.stop_loss = self.share_price * (1-STOP_LOSS)
 
     def __update_buy_amount__(self):
         self.free   = self.free - self.amount
@@ -224,7 +251,11 @@ class PnL(object):
         self.idx = idx
 
     def __calc_profit_from_sales__(self):
-        self.share_price=float(self.invested[self.ticker].Close.loc[self.idx])
+        # self.share_price   = float(self.invested[self.ticker].Close.loc[self.idx])
+        # self.share_price = ( float(self.invested[self.ticker].Close.loc[self.idx])
+        #                    + float(self.invested[self.ticker].High.loc[self.idx])
+        #                    + float(self.invested[self.ticker].Low.loc[self.idx]) ) / 3.0
+        self.share_price   = float(self.invested[self.ticker].Close.loc[self.idx]) * (1.0 - TRANSACTION_PERC)
         self.share_price   = max(self.stop_loss, self.share_price)
         self.today_amount  = self.no_shares * self.share_price
         self.delta_amount  = self.today_amount - self.close_amount

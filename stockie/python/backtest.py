@@ -21,8 +21,7 @@ from tqdm                   import tqdm
 from time                   import sleep, time
 from datetime               import datetime, timedelta
 
-from util                   import open_logfile, log, get_stock_period, \
-                                   build_ticker_list, is_holiday, \
+from util                   import open_logfile, log, build_ticker_list, is_holiday, \
                                    get_current_day_and_time, add_days_to_date, \
                                    set_to_string, add_spaces, calc_runtime, \
                                    dict_to_dataframe
@@ -31,10 +30,32 @@ from pnl                    import Capital, PnL
 from symbols                import TOLERANCE, DATAPATH, LOGPATH, PICPATH, \
                                    STOP_LOSS, STATS_FNM, TEST_TRADE_FNM, \
                                    TRAIN_TRADE_FNM, BUY_FNM, TRADE_COLS, \
-                                   BT_DRET_COL
+                                   BT_DRET_COL, YFLOAD_PATH, MAX_HOLD_PERIOD
 from stats                  import Stats
 
 import warnings; warnings.filterwarnings("ignore")
+
+def get_stock_n_smooth(ticker, period):
+    """ 
+    Copy of what is in util.py. Except this version reads what has been read 
+    from yfinance and stored on file. The stored version is smoothed already, 
+    and reading from disk should be much faster as it avoids the expensive 
+    smoothing operation. The reading from file, will only return success if 
+    there is at least 5 years worth of data to work with. 
+    """
+    gc.collect()
+    try:
+        hist = pd.read_csv(f'{YFLOAD_PATH}{ticker}.csv')
+        hist.index = hist.Date.values
+        del hist['Date']
+        success = len(hist) > 5 * 252 
+        log(f'Successfully retrieved smoothed price data for {ticker} '+
+            f'(len(hist)={len(hist)}, success={success})')
+    except:
+        hist = None
+        success = False
+        log(f'Failed to find {ticker}.csv in {YFLOAD_PATH}!')
+    return success, hist
 
 class Backtester(object):
 
@@ -77,6 +98,7 @@ class Backtester(object):
         self.stats.parse_keep(keep)
         self.stats.calc_stats()
         self.threshold = threshold
+        self.jobid = "00"
         self.update_stats = update_stats
         self.stats.heuristic(self.threshold, verbose=False)
 
@@ -95,7 +117,8 @@ class Backtester(object):
 
         # Pull down MSFT stock for period and use that as basis for determining
         # the stock market trading days
-        success, hist = get_stock_period('MSFT', 2, "max")
+        # success, hist = get_stock_period('MSFT', 2, "max")
+        success, hist = get_stock_n_smooth('MSFT', "max")
         assert success == True, 'Failed to retrieve MSFT data'
         idx = (hist.index >= self.start_date) & (hist.index <= self.end_date)
         self.backtest_trading_dates = hist.loc[idx].index.to_list()
@@ -166,9 +189,37 @@ class Backtester(object):
                 self.myPnL.sell_stock(ticker, self.trading_date)
 
     def process_sell_signals(self):
+        # if self.trading_date in self.sell_dates:
+        #    to_sell = self.sell_dates.pop(self.trading_date, [])
+        #    self.sell_stocks(to_sell)
+
+        
+        to_sell_exceed = []
+        invested_in = list(self.myPnL.invested.keys())
+        for ticker in invested_in:
+            idx = (self.myPnL.df.ticker == ticker) & (self.myPnL.df.invested == 1)
+            tdays = max(self.myPnL.df.days_in_trade.loc[idx])
+            #print(f'tdays={tdays}')
+            if tdays + 1 > MAX_HOLD_PERIOD:
+               sell_dates_l = list(self.sell_dates.keys())
+               #print(f'before: sell_dates={self.sell_dates}')
+               for d in sell_dates_l:
+                   if ticker in self.sell_dates[d]:
+                      t_l = self.sell_dates.pop(d, [])
+                      t_ll = [ t for t in t_l if t != ticker ]
+                      if len(t_ll) > 0:
+                         self.sell_dates[d] = t_ll
+               to_sell_exceed.append(ticker)
+               #print(f'after: sell_dates={self.sell_dates}')
+               
+
+        to_sell_date = []
         if self.trading_date in self.sell_dates:
-            to_sell = self.sell_dates.pop(self.trading_date, [])
-            self.sell_stocks(to_sell)
+           to_sell_date = self.sell_dates.pop(self.trading_date, [])
+
+        to_sell = list( set(to_sell_exceed) | set(to_sell_date) )
+        if len(to_sell) > 0:
+           self.sell_stocks(to_sell)
 
     def buy_stocks(self, to_buy):
         self.buy_date = self.trading_date
@@ -344,7 +395,7 @@ class Backtester(object):
         self.possible_trades_df_scatter_plot()
         gains, losses = self.calc_actual_gains_losses_zeros()
 
-        fnm = f'{DATAPATH}actual_{self.threshold}.csv'
+        fnm = f'{DATAPATH}actual_{self.threshold}_{self.jobid}.csv'
         log(f'Saving sell_df to {fnm}')
         self.sell_df.to_csv(fnm, index=False)
         return gains, losses
@@ -373,33 +424,33 @@ def backtest_run(bt, p):
             'losses'    : losses
            }
 
-def plot_backtest_run(bt, th):
+def plot_backtest_run(bt, th, fnm):
     bt.myPnL.myCapital.df.index = bt.myPnL.myCapital.df.date
     to_plot_cols = ['capital', 'in_use']
     bt.myPnL.myCapital.df[to_plot_cols].plot(figsize=(18,10))
-    plt.savefig(f'{PICPATH}trade_threshold_{th}.png')
+    plt.savefig(f'{PICPATH}{fnm}')
 
 # thresholds = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 thresholds =[
-            (True,  0.05, "0m", 0, "daily_ret"      ),
-            (False, 0.05, "0m", 0, "daily_ret"      ),
-            (True,  0.05, "0m", 0, "gain_daily_ret" ),
-            (False, 0.05, "0m", 0, "gain_daily_ret" ),
+            # (True,  0.05, "0m", 0, "daily_ret"      , "final_perf_00_1.png" ),
+            # (False, 0.05, "0m", 0, "daily_ret"      , "final_perf_00_2.png" ),
+            (True,  0.05, "0m", 0, "gain_daily_ret" , "final_perf_00_3.png" ),
+            (False, 0.05, "0m", 0, "gain_daily_ret" , "final_perf_00_4.png" ),
 
-            (True,  0.05, "0m", 10, "daily_ret"     ),
-            (False, 0.05, "0m", 10, "daily_ret"     ),
-            (True,  0.05, "0m", 10, "gain_daily_ret"),
-            (False, 0.05, "0m", 10, "gain_daily_ret"),
+            # (True,  0.05, "0m", 10, "daily_ret"     , "final_perf_10_1.png" ),
+            # (False, 0.05, "0m", 10, "daily_ret"     , "final_perf_10_2.png" ),
+            (True,  0.05, "0m", 10, "gain_daily_ret", "final_perf_10_3.png" ),
+            (False, 0.05, "0m", 10, "gain_daily_ret", "final_perf_10_4.png" ),
 
-            (True,  0.05, "0m", 20, "daily_ret"      ),
-            (False, 0.05, "0m", 20, "daily_ret"      ),
-            (True,  0.05, "0m", 20, "gain_daily_ret" ),
-            (False, 0.05, "0m", 20, "gain_daily_ret" ),
+            # (True,  0.05, "0m", 20, "daily_ret"     , "final_perf_20_1.png" ),
+            # (False, 0.05, "0m", 20, "daily_ret"     , "final_perf_20_2.png" ),
+            (True,  0.05, "0m", 20, "gain_daily_ret", "final_perf_20_3.png" ),
+            (False, 0.05, "0m", 20, "gain_daily_ret", "final_perf_20_4.png" ),
 
-            (True,  0.05, "0m", 30, "daily_ret"      ),
-            (False, 0.05, "0m", 30, "daily_ret"      ),
-            (True,  0.05, "0m", 30, "gain_daily_ret" ),
-            (False, 0.05, "0m", 30, "gain_daily_ret" ),
+            # (True,  0.05, "0m", 30, "daily_ret"     , "final_perf_30_1.png" ),
+            # (False, 0.05, "0m", 30, "daily_ret"     , "final_perf_30_2.png" ),
+            (True,  0.05, "0m", 30, "gain_daily_ret", "final_perf_30_3.png" ),
+            (False, 0.05, "0m", 30, "gain_daily_ret", "final_perf_30_4.png" ),
 
             #(True,  0.05, "0m", 40, "daily_ret"      ),
             #(False, 0.05, "0m", 40, "daily_ret"      ),
@@ -421,14 +472,16 @@ def run_back_set(bt):
             bt.stats.reset_trade_files(TRAIN_TRADE_FNM, TEST_TRADE_FNM)
             bt.augment_possible_trades_with_buy_opportunities()
 
-        upd_stats, batch_size, keep, th, ret_col = p
+        upd_stats, batch_size, keep, th, ret_col, fnm = p
         bt.ret_col = ret_col
         bt.update_stats = upd_stats
+        bt.jobid = f"{i:02d}"
         bt.stats.batch_size = batch_size
         bt.stats.parse_keep(keep)
 
-        run_dict[i] = backtest_run(bt, p)
-        plot_backtest_run(bt, th)
+        pp = (upd_stats, batch_size, keep, th, ret_col)
+        run_dict[i] = backtest_run(bt, pp)
+        plot_backtest_run(bt, th, fnm)
 
     return run_dict
 

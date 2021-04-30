@@ -77,7 +77,8 @@ def features(data, target):
     features is returned. The target argument contains the name of the 
     column that contains the the target.
     """
-    windows = [3, 5, 10, 15, 20, 30, 45, 60]
+    # windows = [3, 5, 10, 15, 20, 30] #, 45, 60]
+    windows = [ 10, 20, 30 ] 
 
     for i in windows:
         ma = data.Close.rolling(i).mean()
@@ -88,7 +89,8 @@ def features(data, target):
         if 'StdDev' in comb:  
            data[f'StdDev_{i}']  = data.Close.rolling(i).std()
 
-    exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
+    # exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
+    exclude_cols = [target, 'smooth', 'Close', 'Low', 'High', 'Open', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
     factor = data.Close.copy()
     for c in data.columns.tolist():
         if c in exclude_cols:
@@ -170,6 +172,8 @@ def get_signals(X_train, y_train, X_test, threshold):
     dataframe contains. So, the caller will not see a single split date for
     all tickers. 
     """
+
+    log(f"- Building model with features: {X_train.columns}")
 
     scaler    = StandardScaler()
     encoder   = WOEEncoder()
@@ -399,7 +403,7 @@ def ticker_trades(ticker, verbose):
         target = 'target'
         hist[target] = 0
         hist = features(hist, target)
-        exclude_cols = [target, 'smooth', 'Close', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
+        exclude_cols = [target, 'smooth', 'Close', 'Open', 'Low', 'High', 'Date', 'Volume', 'Dividends', 'Stock Splits'] 
         used_cols = [c for c in hist.columns.tolist() if c not in exclude_cols]
         X, y, X_train, X_test, y_train, y_test = split_data(hist, used_cols, target, 0.7)
         y_train_len = len(y_train)
@@ -698,18 +702,19 @@ if __name__ == "__main__":
     else:
         run_type = 'single'
         if run_type == 'job':
-           cols = ['MACD', 'PctDiff', 'StdDev', 'RSI', 'WPR', 'MFI', 'BBP']
+           cols = ['MACD', 'PctDiff', 'StdDev', 'RSI', 'WPR', 'MFI', 'BBP', 'P/E Ratio']
            combs = []
            for p in powerset(cols):
                if len(p) > 2:
                   combs.append(p)
         else:
-           combs = [ ('MACD', 'RSI', 'BBP', 'P/E Ratio') ]
+           combs = [ ('MACD', 'RSI', 'BBP') ]
 
-        best_comb  = None
-        best_score = None
+        best_comb1, best_comb2, best_comb3    = None, None, None
+        best_score1, best_score2, best_score3 = None, None, None
+        print('Starting for loop', len(combs))
         for run, comb in enumerate(combs):
-            # if run > 1:
+            # if run > 3:
             #   break
 
             print('')
@@ -720,12 +725,36 @@ if __name__ == "__main__":
             trade_main()
             test_df = pd.read_csv(TEST_TRADE_FNM)
             stats_cnt, stats_pct = stats_table(test_df, 55)
-            score = stats_pct[0,0]
-            if best_score is None or score > best_score:
-               best_comb  = comb
-               best_score = score
 
-            print(f'best_comb={best_comb} best_score={best_score:.2f}')
+            score1 = stats_pct[0,0]
+            score2 = 100 * (stats_pct[0,0] / stats_pct[0,3])
+            score3 = stats_pct[2,0]
 
-        print(f'Best combination of features is : {best_comb}')
-        print(f'Best score is                   : {best_score:.2f}') 
+            if best_score1 is None or score1 > best_score1:
+               best_comb1  = comb
+               best_score1 = score1
+
+            if best_score2 is None or score2 > best_score2:
+               best_comb2  = comb
+               best_score2 = score2
+
+            if best_score3 is None or score3 > best_score3:
+               best_comb3  = comb
+               best_score3 = score3
+            
+            print(f'best_comb1={best_comb1} best_score1={best_score1:.2f}')
+            print(f'best_comb2={best_comb2} best_score2={best_score2:.2f}')
+            print(f'best_comb3={best_comb3} best_score3={best_score3:.2f}')
+
+        print(f'Best combination1 of features is : {best_comb1}')
+        print(f'Best score1 is                   : {best_score1:.2f}') 
+
+        print(f'Best combination2 of features is : {best_comb2}')
+        print(f'Best score2 is                   : {best_score2:.2f}') 
+
+        print(f'Best combination3 of features is : {best_comb3}')
+        print(f'Best score3 is                   : {best_score3:.2f}') 
+
+    print('')
+    print('Done.')
+    print('')

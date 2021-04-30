@@ -1,12 +1,16 @@
 yfinance/*.txt
-fund_indicators/data/*
+fund_indicators/data/
 *.log
-*.png
-stockie/data/bak/*
+stockie/pic/
+stockie/notebook/*.png
+stockie/python/cvtrade.py
+stockie/python/ind_trade.py
+stockie/python/negtrades_trade.py
+stockie/python/orig_trade.py
+stockie/data/origtrades/
+tech_indicators/
 *.csv
-*.py_bak
 x.py
-transcripts/data/*
 .DS_Store
 
 # Byte-compiled / optimized / DLL files
